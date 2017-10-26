@@ -9,8 +9,14 @@ Others of similar vintage might work too.
 
 I used a few lines from dcc ( original work by C. Cifuentes; one fork available on github.com/nemerle/dcc )
 
+### compiling
+I include a codeblocks project file but really not a requirement. Just
+```gcc main.c```
+should do the trick.
 
-Example text output for a test ~ 700kB .exe with 31 overlays :
+### example
+Output for a test ~ 700kB .exe with 31 overlays : one file per overlay, plus a text summary of each overlay header:
+
 (tab-separated text)
 ```
 OVL #	start(file ofs)	siz	numpages (512B)	# relocs	Offset to load image (parags)	Minimum alloc (parags)	Maximum alloc (parags)	Initial SS:SP	Initial CS:IP	

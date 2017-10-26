@@ -7,6 +7,10 @@
  * (c) fenugrec 2017
  * I use minor parts of dcc
  * (C. Cifuentes orig work; fork github.com/nemerle/dcc
+ *
+ * Assumes host is little-endian (x86 etc). This should compile with any C99 compliant compiler, for any target.
+ *
+ * Note : unsafe code - limited bounds checking, naive string processing. Run at your own risk
  */
 
 #include <stdint.h>
