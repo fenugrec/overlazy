@@ -226,6 +226,41 @@ void dump_ovls(const struct exefile *exf, const char *prefix) {
 	}
 }
 
+
+/** raw search for all "int 0x3F" calls
+ *
+ * expect lots of spurious hits due to no filtering
+ */
+void dump_ovlcalls(const struct exefile *exf) {
+#define PATLEN 5
+#define MATCHLEN 2
+	const u8 pat[MATCHLEN]={0xCD, 0x3F};	//pattern
+
+	u32 ofs = 0;	//within exe file
+
+	printf(	"file_ofs\t"
+			"ovl_idx\t"
+			"offs\n"
+			);
+	while ((ofs + PATLEN) <= exf->siz) {
+		int i;
+		bool match = 1;
+		for (i=0; i < MATCHLEN; i++) {
+			if (exf->buf[ofs + i] != pat[i]) {
+				match = 0;
+				break;
+			}
+		}
+		if (match) {
+			u16 ovl_offs = LH(&exf->buf[ofs+3]);
+			printf("%04X\t%02X\t%04X\n",
+					ofs, (unsigned) exf->buf[ofs+2], (unsigned) ovl_offs );
+		}
+		ofs++;
+	}
+	return;
+}
+
 /** print list of overlay chunks and their headers
 */
 void list_ovls(const struct exefile *exf) {
@@ -285,11 +320,12 @@ int main(int argc, char *argv[])
 {
 	struct exefile exf = {0};
 
-	if (argc !=2) {
+	if (argc < 2) {
 		printf(	"**** %s\n"
 				"**** overlayed DOS exe tool\n"
 				"**** (c) 2017 fenugrec\n"
-				"Usage:\t%s <exefile>\n"
+				"Usage:\t%s <exefile> [-c]\n"
+				"\nif \"-c\" is specified : don't dump overlays, just dump all int 0x3F calls.\n"
 				, argv[0],argv[0]);
 		return 0;
 	}
@@ -299,8 +335,20 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	list_ovls(&exf);
-	dump_ovls(&exf,argv[1]);
+	switch (argc) {
+		case 2:
+			list_ovls(&exf);
+			dump_ovls(&exf,argv[1]);
+			break;
+		case 3:
+			if (argv[2][1]=='c') {
+				dump_ovlcalls(&exf);
+			}
+			break;
+		default:
+			printf("bad args\n");
+			break;
+	}
 	close_exe(&exf);
 
 	return 0;
