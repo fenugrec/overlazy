@@ -1,17 +1,18 @@
+### overlazy 
+
 overlazy is a crude tool to split overlayed DOS exe into chunks; one file per overlay.
  
 Designed for binaries compiled with MS C compiler 5.1;
 Others of similar vintage might work too.
 
 (c) fenugrec 2017
-I used a few lines from dcc ( original work by C. Cifuentes orig work; one fork available on github.com/nemerle/dcc )
 
-
+I used a few lines from dcc ( original work by C. Cifuentes; one fork available on github.com/nemerle/dcc )
 
 
 Example text output for a test ~ 700kB .exe with 31 overlays :
 (tab-separated text)
-
+```
 OVL #	start(file ofs)	siz	numpages (512B)	# relocs	Offset to load image (parags)	Minimum alloc (parags)	Maximum alloc (parags)	Initial SS:SP	Initial CS:IP	
 0000	00000000	00071400	038A	247E	0940	0AFE	FFFF	67EE:AFC8	2CBD:2905
 0001	00071400	00002000	0010	00DC	0040	0000	FFFF	67EE:AFC8	2CBD:2905
@@ -44,3 +45,4 @@ OVL #	start(file ofs)	siz	numpages (512B)	# relocs	Offset to load image (parags)
 001C	000AB400	00001600	000B	0093	0040	0000	FFFF	67EE:AFC8	2CBD:2905
 001D	000ACA00	00000C00	0006	0074	0020	0000	FFFF	67EE:AFC8	2CBD:2905
 001E	000AD600	00000600	0003	0026	0020	0000	FFFF	67EE:AFC8	2CBD:2905
+``````
