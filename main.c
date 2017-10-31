@@ -271,9 +271,8 @@ void list_ovls(const struct exefile *exf) {
 
 	printf(	"OVL #\t"
 			"start(file ofs)\t"
-			"siz\t"
+			"img siz\t"
 
-			"numpages (512B)\t"
 			"# relocs\t"
 			"Offset to load image (parags)\t"
 			"Minimum alloc (parags)\t"
@@ -283,6 +282,7 @@ void list_ovls(const struct exefile *exf) {
 			"Initial CS:IP\t"
 			"\n");
 	while (ofs < exf->siz) {
+		u32 img_siz;
 		//1) get chunk header
 		read_header(&hdr, &exf->buf[ofs]);
 
@@ -294,12 +294,13 @@ void list_ovls(const struct exefile *exf) {
 		}
 
 		chunksiz = 512 * hdr.numPages;
+		img_siz = (chunksiz + hdr.lastPageSize - 512) - (hdr.numParaHeader * 16);
 		printf(	"%04X\t%08X\t%08X\t"
-				"%04X\t%04X\t%04X\t%04X\t%04X\t"
+				"%04X\t%04X\t%04X\t%04X\t"
 				"%04X:%04X\t%04X:%04X"
 				"\n",
-				i, ofs, chunksiz,
-				hdr.numPages,
+				i, ofs, img_siz,
+
 				hdr.numReloc,
 				hdr.numParaHeader,
 				hdr.minAlloc,
@@ -320,12 +321,14 @@ int main(int argc, char *argv[])
 {
 	struct exefile exf = {0};
 
-	if (argc < 2) {
+	if (argc != 3) {
 		printf(	"**** %s\n"
 				"**** overlayed DOS exe tool\n"
 				"**** (c) 2017 fenugrec\n"
-				"Usage:\t%s <exefile> [-c]\n"
-				"\nif \"-c\" is specified : don't dump overlays, just dump all int 0x3F calls.\n"
+				"Usage:\t%s <exefile> [-c|-l|-d]\n"
+				"\t-c : list all int 0x3F calls.\n"
+				"\t-l : list overlays\n"
+				"\t-d : dump overlays to separate files\n"
 				, argv[0],argv[0]);
 		return 0;
 	}
@@ -335,15 +338,15 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	switch (argc) {
-		case 2:
+	switch (argv[2][1]) {
+		case 'l':
 			list_ovls(&exf);
+			break;
+		case 'd':
 			dump_ovls(&exf,argv[1]);
 			break;
-		case 3:
-			if (argv[2][1]=='c') {
-				dump_ovlcalls(&exf);
-			}
+		case 'c':
+			dump_ovlcalls(&exf);
 			break;
 		default:
 			printf("bad args\n");
