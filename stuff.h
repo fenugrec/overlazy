@@ -18,6 +18,9 @@ typedef uint32_t dword;
 // round up seg:ofs to next segment
 #define nextseg(seg,ofs)	(((((seg << 4) + ofs) + 16) & ~0x0F) >> 4)
 
+/* this header isn't a perfect match with some MS headers
+ * which have an extra u16 field at the end
+ */
 struct header {				/*      EXE file header		 	 */
 	u8	sigLo;			/* .EXE signature: 0x4D 0x5A	 */
 	u8	sigHi;

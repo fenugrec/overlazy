@@ -400,22 +400,22 @@ struct ovl_desc *parse_ovls(const u8 *buf, u32 siz, u16 num_ovls) {
  * @param relocbuf : destination for the new reloc table
  * (removed) param dest_ofs : offset into imgbuf where to write the new reloc entries
  * @param dispbase : offset into new load_image where the displaced chunk starts, in parags
- *  (removed) param origbase : offset into original image where the chunk was meant to be mapped
+ * @param origbase : offset into original image where the chunk was meant to be mapped
  * @param relocs : original reloc table, valid when newchunk was mapped at OVL_BASE
  *
  * All this does is change the reloc entries to point to the right items. The items themselves
  * need not be changed since they are absolute pointers already.
  */
-void fixup_relocs(u8 *relocbuf, u16 dispbase, const u8 *relocs, u16 num_relocs) {
+void fixup_relocs(u8 *relocbuf, u16 dispbase, u16 origbase, const u8 *relocs, u16 num_relocs) {
 	u16 i;
 	u32 dest_ofs = 0;
 
 	for (i = 0; i < num_relocs; i++) {
-		u16 roffs = read_u16_LE(&relocs[2 * i]);
-		u16 rseg = read_u16_LE(&relocs[2 * (i + 1)]);	//segment, relative to chunk base, where the item is located
+		u16 roffs = read_u16_LE(&relocs[(4 * i) + 0]);
+		u16 rseg = read_u16_LE(&relocs[(4 * i) + 2]);	//segment, relative to chunk base, where the item is located
 		//u32 r_lin = (rseg << 4) + roffs;	//"address" into displaced chunk of relocation item
 
-		u16 r_newseg = rseg + dispbase;
+		u16 r_newseg = rseg - origbase + dispbase;
 
 		write_u16_LE(&relocbuf[dest_ofs], roffs);
 		dest_ofs += 2;
@@ -491,6 +491,7 @@ void dump_newheader(FILE *outf, struct new_exe *nex, u32 rcur, u16 imgcur_parags
 	u32 padlen;
 	const u8 pagebuf[512] = {0};	//just used to write padding 0 bytes
 
+	nex->hdr.relocTabOffset = sizeof(struct header);	//1C != 1E !!
 	nex->hdr.numReloc = rcur / 4;
 	nex->hdr.numParaHeader = (sizeof(struct header) + rcur + 15) >> 4;	//round to next parag
 	nex->hdr.lastPageSize = ((nex->hdr.numParaHeader + imgcur_parags) * 16) & 511;
@@ -518,9 +519,11 @@ void dump_newheader(FILE *outf, struct new_exe *nex, u32 rcur, u16 imgcur_parags
 	wcur += wlen;
 
 	//0-pad to 512-byte page if necessary
+#if PADPAGE
 	padlen = (nex->hdr.numPages * 512) - wcur;
 	wlen = fwrite(pagebuf, 1, padlen, outf);
 	if (wlen != padlen) goto write_err;
+#endif
 
 	return;
 
@@ -621,7 +624,7 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u16 lut_e
 
 		//copy ovl image, and append fixed up relocs to the main table
 		memcpy(&nex.img[imgcur_parags * 16], &exf->buf[oda[i].img_ofs], oda[i].img_siz);
-		fixup_relocs(&nex.relocs[rcur], imgcur_parags, &exf->buf[oda[i].relocs_ofs], oda[i].hdr.numReloc);
+		fixup_relocs(&nex.relocs[rcur], imgcur_parags, ovl_base, &exf->buf[oda[i].relocs_ofs], oda[i].hdr.numReloc);
 
 		//adjust overlay segment LUT
 		chunk_segdelta = imgcur_parags - ovl_base;
