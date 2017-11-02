@@ -1,6 +1,8 @@
 #ifndef STUFH
 #define STUFH
 
+/** these are not exports, just internal structs */
+
 #include <stdint.h>
 
 typedef uint8_t u8;
@@ -11,10 +13,10 @@ typedef uint16_t word;
 typedef uint32_t dword;
 
 //************* hax macros
-/* Macro reads a LH word from the image regardless of host convention */
-/* Returns a 16 bit quantity, e.g. C000 is read into an Int as C000 */
-//#define LH(p)  ((int16)((byte *)(p))[0] + ((int16)((byte *)(p))[1] << 8))
-#define LH(p)    ((word)((byte *)(p))[0]  + ((word)((byte *)(p))[1] << 8))
+#define read_u16_LE(u8p)    ((u16)((u8 *)(u8p))[0] + ((u16)((u8 *)(u8p))[1] << 8))
+
+// round up seg:ofs to next segment
+#define nextseg(seg,ofs)	(((((seg << 4) + ofs) + 16) & ~0x0F) >> 4)
 
 struct header {				/*      EXE file header		 	 */
 	u8	sigLo;			/* .EXE signature: 0x4D 0x5A	 */
@@ -38,6 +40,28 @@ struct exefile {
 	u32 siz;
 	u8 *buf;	//whole contents
 	struct header hdr;
+};
+
+/** overlay descriptor */
+struct ovl_desc {
+	struct header hdr;
+	u32 relocs_ofs;	//position in orig .exe
+	u32 img_ofs;	//position in orig .exe
+	u32 img_siz;	//in bytes (just image, no relocs or header)
+};
+
+/** relocation table entry */
+struct reloc_entry {
+	u16 ofs;
+	u16 seg;
+};
+
+/* building blocks for relinking new exe with flattened overlays */
+struct new_exe {
+	struct header hdr;
+	u8 *relocs;	//array of all reloc entries
+	u32 imgsiz;
+	u8 *img;	//image ("load module")
 };
 
 

@@ -21,7 +21,13 @@
 
 #include "stuff.h"
 
-static void print_header(const struct header *hdr) {
+inline void write_u16_LE(u8 *dest, u16 val) {
+	*dest++ = val & 0xFF;
+	*dest = val >> 8;
+	return;
+}
+
+void print_header(const struct header *hdr) {
 
 	printf(	"bytes lastpage\t"
 			"File pages (512B)\t"
@@ -121,7 +127,7 @@ bool parse_header(struct exefile *exf) {
 }
 
 
-/** init exefile struct with complete .exe read into it
+/** init exefile struct with complete .exe read into it.
  * exefile->buf must be free'd by caller
  */
 bool load_exe(struct exefile *exf, const char *filename) {
@@ -252,7 +258,7 @@ void dump_ovlcalls(const struct exefile *exf) {
 			}
 		}
 		if (match) {
-			u16 ovl_offs = LH(&exf->buf[ofs+3]);
+			u16 ovl_offs = read_u16_LE(&exf->buf[ofs+3]);
 			printf("%04X\t%02X\t%04X\n",
 					ofs, (unsigned) exf->buf[ofs+2], (unsigned) ovl_offs );
 		}
@@ -316,20 +322,284 @@ void list_ovls(const struct exefile *exf) {
 	}
 }
 
+/** count # of overlays in a given buf
+ * excludes the root overlay (# 0)
+ *
+ * In case of malformed input, this just stops counting and so could return 0.
+ */
+u16 count_ovls(const u8 *buf, u32 siz) {
+	u32 ofs = 0;
+	struct header hdr;
+	u16 i = 0;
+
+	while (ofs < siz) {
+		u32 chunksiz;
+		//1) get chunk header
+		read_header(&hdr, &buf[ofs]);
+
+		i++;
+		//2) check MZ
+		bool validsig = (hdr.sigLo == 0x4D && hdr.sigHi == 0x5A);
+		if (!validsig) {
+			break;
+		}
+
+		chunksiz = 512 * hdr.numPages;
+
+		ofs += chunksiz;
+	}
+	i--;
+	return i;
+}
+
+/** parse all overlays, including root OVL_000
+ * returns an array of "struct ovl_desc" that must be free'd by caller
+ * Assumes no bad data.
+ *
+ * @param num_ovls number of overlays *excluding the root*.
+ *
+ * so the array index can be the overlay #, as intended.
+ */
+struct ovl_desc *parse_ovls(const u8 *buf, u32 siz, u16 num_ovls) {
+	struct ovl_desc *od_arr;
+	u16 i = 0;
+	u32 ofs = 0;
+
+	od_arr = malloc((num_ovls + 1) * sizeof(struct ovl_desc));
+	if (!od_arr) return NULL;
+
+	while (i <= num_ovls) {
+		u32 chunksiz;
+		struct ovl_desc *oda;
+		struct header *hdr;	//shortcuts
+
+		oda = &od_arr[i];
+		hdr = &oda->hdr;
+
+		//get chunk header
+		read_header(hdr, &buf[ofs]);
+
+		chunksiz = 512 * hdr->numPages;
+		// fill in descriptor
+		oda->img_ofs = ofs + (hdr->numParaHeader * 16);
+		oda->img_siz = (chunksiz + hdr->lastPageSize - 512) - (hdr->numParaHeader * 16);
+		oda->relocs_ofs = ofs + hdr->relocTabOffset;
+
+		i++;
+		ofs += chunksiz;
+	}
+	return od_arr;
+}
+
+/** fixup a set of relocs for a displaced chunk.
+ * (removed) param imgbuf must start at IMG_BASE and contain the appended newchunk
+ * @param relocbuf : destination for the new reloc table
+ * (removed) param dest_ofs : offset into imgbuf where to write the new reloc entries
+ * @param dispbase : offset into new load_image where the displaced chunk starts, in parags
+ *  (removed) param origbase : offset into original image where the chunk was meant to be mapped
+ * @param relocs : original reloc table, valid when newchunk was mapped at OVL_BASE
+ *
+ * All this does is change the reloc entries to point to the right items. The items themselves
+ * need not be changed since they are absolute pointers already.
+ */
+void fixup_relocs(u8 *relocbuf, u16 dispbase, const u8 *relocs, u16 num_relocs) {
+	u16 i;
+	u32 dest_ofs = 0;
+
+	for (i = 0; i < num_relocs; i++) {
+		u16 roffs = read_u16_LE(&relocs[2 * i]);
+		u16 rseg = read_u16_LE(&relocs[2 * (i + 1)]);	//segment, relative to chunk base, where the item is located
+		//u32 r_lin = (rseg << 4) + roffs;	//"address" into displaced chunk of relocation item
+
+		u16 r_newseg = rseg + dispbase;
+
+		write_u16_LE(&relocbuf[dest_ofs], roffs);
+		dest_ofs += 2;
+		write_u16_LE(&relocbuf[dest_ofs], r_newseg);
+		dest_ofs += 2;
+
+	}
+	return;
+}
+
+/** correct all overlay segment LUT entries that point to the given overlay #.
+ *
+ * @param seglutpos : offset in imgbuf of seg LUT
+ * @param olutpos : offs in imgbuf of ovl # LUT
+ * @param lut_entries : # of entries
+ * @param seg_delta : value to add to LUT entry to point to new segment.
+ */
+void fixup_seglut(u8 *imgbuf, u32 seglutpos, u32 olutpos, u16 lut_entries, u16 ovlno, u16 seg_delta) {
+	u16 i;
+
+	for (i = 0; i < lut_entries; i++) {
+		u8 test_no = imgbuf[olutpos + i];
+		if (test_no != ovlno) continue;
+
+		u16 seg = read_u16_LE(&imgbuf[seglutpos + (2*i) ]);
+		write_u16_LE(&imgbuf[seglutpos + (2*i) ], seg + seg_delta);
+	}
+}
+
+/** fixup INT 0x3F calls
+ *
+ * @param seglutpos : ofs in imgbuf of segment LUT
+ * @param olutpos : ofs in imgbuf of ovl # LUT
+ *
+ * replaces "CD 3F" opcodes and following 3 bytes with a "call far ptr" to the correct destination
+ * this must be done after the LUT has been corrected with the new mapping
+ */
+void fixup_int3f(u8 *imgbuf, u32 bufsiz, u32 seglutpos, u32 olutpos, u16 lut_entries) {
+	u32 cur;
+
+	for (cur = 0; (cur + 5) < bufsiz; cur++) {
+		u8 ovl_id;	//not the same as overlay # !
+		u16 seg, offs;
+		if (imgbuf[cur] != 0xCD) continue;
+		if (imgbuf[cur + 1] != 0x3F) continue;
+
+		ovl_id = imgbuf[cur + 2];
+		offs = read_u16_LE(&imgbuf[cur + 3]);
+		seg = read_u16_LE(&imgbuf[seglutpos + (2 * ovl_id)]);
+
+		imgbuf[cur] = 0x9A;	//opcode for "call (far ptr) seg:offs"
+		write_u16_LE(&imgbuf[cur+1], offs);
+		write_u16_LE(&imgbuf[cur+3], seg);
+		cur += 4;	//not +5 since there's a "++" at the loop top
+	}
+}
+
+/** convert overlayed .exe to monolithic .exe with flattened overlays
+ *
+ * @param seglut_pos file offset of overlay segment LUT
+ * @param olut_pos file offset of overlay number LUT
+ * @param lut_entries
+ * @param ovl_base : segment where overlays are loaded (relative to image base)
+ * @param out_fname : filename for output
+ *
+ * The resulting .exe will probably not run properly anymore.
+*/
+void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u16 lut_entries, u16 ovl_base, const char *out_fname) {
+	u16 num_ovls;	//excluding root
+	u16 num_relocs = 0;
+	u32 imgsiz = 0;
+	u16 i;
+	struct ovl_desc *oda;	//array of descriptors
+	struct new_exe nex;
+	u32 imgcur_parags;
+	u32 rcur;	//cursors into new img and reloc tables
+
+	printf("seglut @ %lX, ovllut @ %lX, entries=%X ovlbase %X:0000\n",
+			(unsigned long) seglut_pos, (unsigned long) olut_pos,
+			(unsigned) lut_entries, (unsigned) ovl_base);
+
+	num_ovls = count_ovls(exf->buf, exf->siz);
+	if (!num_ovls) {
+		printf("no ovl\n");
+		return;
+	}
+
+	oda = parse_ovls(exf->buf, exf->siz, num_ovls);
+	if (!oda) {
+		printf("ovl parse fail\n");
+		return;
+	}
+
+	nex.img = NULL;
+	nex.relocs = NULL;
+
+	// gather ovl stats
+	for (i=0; i <= num_ovls; i++) {
+		num_relocs += oda[i].hdr.numReloc;
+		imgsiz += oda[i].img_siz;
+	}
+
+	// check if it can be done by mapping OVLs *above* SS:SP.
+	// Assume we need 1 parag padding for each ovl
+	u16 required_segs = ((imgsiz - oda[0].img_siz) >> 4) + num_ovls;
+	u16 availseg = (0xFFFF - nextseg(exf->hdr.initSS, exf->hdr.initSP));
+	if (required_segs >= availseg) {
+		printf("not enough addressing space to unroll that shit\n");
+		goto fexit;
+	}
+
+	//allocate new data structures
+	nex.relocs = malloc(num_relocs * 4);
+	if (!nex.relocs) goto fexit;
+		// max total size is (headers) + (reloc table) + (base size up to SS:SP) + (ovl img data) + 1 parag per ovl
+	nex.img = calloc(	sizeof(struct header) +
+						num_relocs * sizeof(struct reloc_entry) +
+						(exf->hdr.initSS << 4) + exf->hdr.initSP + 16 +
+						(imgsiz - oda[0].img_siz) +
+						num_ovls * 16,
+						1);
+	if (!nex.img) goto fexit;
+
+	// write in root OVL_000 image, including its relocs
+	memcpy(nex.relocs, &exf->buf[oda[0].relocs_ofs], oda[0].hdr.numReloc * 4);
+	memcpy(nex.img, &exf->buf[oda[0].img_ofs], oda[0].img_siz);
+	rcur = oda[0].hdr.numReloc * 4;
+	imgcur_parags = exf->hdr.initSS + ((exf->hdr.initSP + 15) >> 4);	//bring cursor after stack area
+
+	//convert lut positions to "offset within image"
+	seglut_pos -= (exf->hdr.numParaHeader * 16);
+	olut_pos -= (exf->hdr.numParaHeader * 16);
+
+	// masterloop (tm)
+	for (i = 1; i <= num_ovls; i++) {
+		u16 chunk_segdelta;	//distance (in parags) from new location to original mapping location OVL_BASE
+
+		//copy ovl image, and append fixed up relocs to the main table
+		memcpy(&nex.img[imgcur_parags * 16], &exf->buf[oda[i].img_ofs], oda[i].img_siz);
+		fixup_relocs(&nex.relocs[rcur], imgcur_parags, &exf->buf[oda[i].relocs_ofs], oda[i].hdr.numReloc);
+
+		//adjust overlay segment LUT
+		chunk_segdelta = imgcur_parags - ovl_base;
+		fixup_seglut(nex.img, seglut_pos, olut_pos, lut_entries, i, chunk_segdelta);
+
+		//advance cursors
+		rcur += (oda[i].hdr.numReloc * 4);
+		imgcur_parags += ((oda[i].img_siz + 15) >> 4);	//round to next parag
+	}
+
+	//fixup INT 3F calls
+	fixup_int3f(nex.img, imgcur_parags * 16, seglut_pos, olut_pos, lut_entries);
+
+	//regen new exe header
+
+fexit:
+	if (nex.img) free(nex.img);
+	if (nex.relocs) free(nex.relocs);
+	free(oda);
+	return;
+}
+
+void print_usage(const char *argv0) {
+	printf(	"**** %s\n"
+		"**** overlayed DOS exe tool\n"
+		"**** (c) 2017 fenugrec\n"
+		"Usage:\t%s <exefile> <command> [command options]]\n"
+		"Commands and options:\n"
+		"\tc : list all int 0x3F calls.\n"
+		"\tl : list overlays\n"
+		"\td : dump overlays to separate files\n"
+		"\tu <SEGLUT_POS> <OVLLUT_POS> <OVL_BASE>: unfold overlays\n"
+		"\t\tSEGLUT_POS : file offset of overlay segment LUT\n"
+		"\t\tOVLLUT_POS : file offset of overlay number LUT\n"
+		"\t\tLUT_ENTRIES : number of entries in LUT\n"
+		"\t\tOVL_BASE : loaded overlay's segment (relative to image base)\n",
+		argv0, argv0);
+	return;
+
+}
 
 int main(int argc, char *argv[])
 {
 	struct exefile exf = {0};
+	bool badargs = 1;
 
-	if (argc != 3) {
-		printf(	"**** %s\n"
-				"**** overlayed DOS exe tool\n"
-				"**** (c) 2017 fenugrec\n"
-				"Usage:\t%s <exefile> [-c|-l|-d]\n"
-				"\t-c : list all int 0x3F calls.\n"
-				"\t-l : list overlays\n"
-				"\t-d : dump overlays to separate files\n"
-				, argv[0],argv[0]);
+	if (argc < 3) {
+		print_usage(argv[0]);
 		return 0;
 	}
 
@@ -338,19 +608,45 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	switch (argv[2][1]) {
+	switch (argv[2][0]) {
 		case 'l':
 			list_ovls(&exf);
+			badargs = 0;
 			break;
 		case 'd':
 			dump_ovls(&exf,argv[1]);
+			badargs = 0;
 			break;
 		case 'c':
 			dump_ovlcalls(&exf);
+			badargs = 0;
+			break;
+		case 'u':
+			if (argc != 7) {
+				break;
+			} else {
+				unsigned long seglut, olut;
+				unsigned lut_entries, ovlbase;
+				if (sscanf(argv[3], "%lx", &seglut) != 1) break;
+				if (sscanf(argv[4], "%lx", &olut) != 1) break;
+				if (sscanf(argv[5], "%x", &lut_entries) != 1) break;
+				if (sscanf(argv[6], "%x", &ovlbase) != 1) break;
+				if (seglut > exf.siz) break;
+				if (olut > exf.siz) break;
+				if (ovlbase >= 0xFFFF) break;
+				if (lut_entries > 0xFFFF) break;
+				badargs = 0;
+				unfold_overlay(&exf, (u32) seglut, (u32) olut, (u16) lut_entries, (u16) ovlbase, "test.ex_");
+				break;
+			}
+
 			break;
 		default:
-			printf("bad args\n");
 			break;
+	}
+	if (badargs) {
+		printf("bad args\n");
+		print_usage(argv[0]);
 	}
 	close_exe(&exf);
 
