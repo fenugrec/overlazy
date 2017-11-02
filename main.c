@@ -5,12 +5,16 @@
  * Others of similar vintage might work too.
  *
  * (c) fenugrec 2017
- * I use minor parts of dcc
- * (C. Cifuentes orig work; fork github.com/nemerle/dcc
  *
- * Assumes host is little-endian (x86 etc). This should compile with any C99 compliant compiler, for any target.
+ * Assumptions:
+ * - host is little-endian (x86 etc).
+ * - C99 compliant compiler, any OS
+ * - source .exe is a valid DOS program
+ * - overlays don't have relative pointers to data/code outside their own image
+ * - overlays don't store data outside their own image, within the OVL mapping area
  *
  * Note : unsafe code - limited bounds checking, naive string processing. Run at your own risk
+ *
  */
 
 #include <stdint.h>
@@ -469,6 +473,62 @@ void fixup_int3f(u8 *imgbuf, u32 bufsiz, u32 seglutpos, u32 olutpos, u16 lut_ent
 	}
 }
 
+/** tweak header fields for mostly correct info, and write out.
+ *
+ * @param rcur size (bytes) of all relocs in in nex.relocs[]
+ * @param imgcur_parags size (parags) of load image
+ *
+ * checksum ignored
+ * new header must be already filled except
+ *	lastPageSize;
+ *	numPages;
+ *	numReloc;
+ *	numParaHeader;
+ */
+void dump_newheader(FILE *outf, struct new_exe *nex, u32 rcur, u16 imgcur_parags) {
+	u32 wcur = 0;
+	u32 wlen;
+	u32 padlen;
+	const u8 pagebuf[512] = {0};	//just used to write padding 0 bytes
+
+	nex->hdr.numReloc = rcur / 4;
+	nex->hdr.numParaHeader = (sizeof(struct header) + rcur + 15) >> 4;	//round to next parag
+	nex->hdr.lastPageSize = ((nex->hdr.numParaHeader + imgcur_parags) * 16) & 511;
+    nex->hdr.numPages = (((nex->hdr.numParaHeader + imgcur_parags) * 16) + 511) / 512;
+
+    //write hdr
+    wlen = fwrite(&nex->hdr, 1, sizeof(struct header), outf);
+    if (wlen != sizeof(struct header)) goto write_err;
+    wcur += wlen;
+
+    //write relocs
+    wlen = fwrite(nex->relocs, 1, rcur, outf);
+    if (wlen != rcur) goto write_err;
+    wcur += wlen;
+
+	//0-pad relocs if necessary
+	padlen = (nex->hdr.numParaHeader * 16) - wcur;
+	wlen = fwrite(pagebuf, 1, padlen, outf);
+	if (wlen != padlen) goto write_err;
+	wcur += wlen;
+
+	//write image
+	wlen = fwrite(nex->img, 1, imgcur_parags * 16, outf);
+	if  (wlen != imgcur_parags * 16) goto write_err;
+	wcur += wlen;
+
+	//0-pad to 512-byte page if necessary
+	padlen = (nex->hdr.numPages * 512) - wcur;
+	wlen = fwrite(pagebuf, 1, padlen, outf);
+	if (wlen != padlen) goto write_err;
+
+	return;
+
+write_err:
+	printf("fwrite err\n");
+	return;
+}
+
 /** convert overlayed .exe to monolithic .exe with flattened overlays
  *
  * @param seglut_pos file offset of overlay segment LUT
@@ -488,6 +548,7 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u16 lut_e
 	struct new_exe nex;
 	u32 imgcur_parags;
 	u32 rcur;	//cursors into new img and reloc tables
+	FILE *outf;
 
 	printf("seglut @ %lX, ovllut @ %lX, entries=%X ovlbase %X:0000\n",
 			(unsigned long) seglut_pos, (unsigned long) olut_pos,
@@ -499,9 +560,18 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u16 lut_e
 		return;
 	}
 
+	//open output file
+	outf = fopen(out_fname, "wb");
+	if (!outf) {
+		printf("can't create outf\n");
+		return;
+	}
+
+	// fill ovl descriptors
 	oda = parse_ovls(exf->buf, exf->siz, num_ovls);
 	if (!oda) {
 		printf("ovl parse fail\n");
+		fclose(outf);
 		return;
 	}
 
@@ -565,9 +635,12 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u16 lut_e
 	//fixup INT 3F calls
 	fixup_int3f(nex.img, imgcur_parags * 16, seglut_pos, olut_pos, lut_entries);
 
-	//regen new exe header
+	//regen new exe header. mostly same as orig
+	memcpy(&nex.hdr, &exf->hdr, sizeof(struct header));
+	dump_newheader(outf, &nex, rcur, imgcur_parags);
 
 fexit:
+	fclose(outf);
 	if (nex.img) free(nex.img);
 	if (nex.relocs) free(nex.relocs);
 	free(oda);
