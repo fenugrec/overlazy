@@ -1,54 +1,129 @@
-### overlazy 
+### overlazy
+(c) fenugrec 2017
+Licensed under GPLv3
 
-overlazy is a crude tool to split overlayed DOS exe into chunks; one file per overlay.
+overlazy is a crude tool to analyze, split and flatten overlayed DOS exe programs.
  
 Designed for binaries compiled with MS C compiler 5.1;
-Others of similar vintage might work too.
+Others of similar vintage might work too. Probably MSC from 4.x to 7.x, and Visual C 1.x ?
 
-(c) fenugrec 2017
+Note : this is relatively unsafe code : limited bounds checking, naive string processing, etc. Run at your own risk !
+Should be harmless on well-formed , legitimate .exe files.
 
-I used a few lines from dcc ( original work by C. Cifuentes; one fork available on github.com/nemerle/dcc )
+#### status
+- almost works - the int 3F fixups don't work properly since the additional "call far" isn't covered by the relocations.
+- mapping the overlays above the top-of-stack could be a problem
 
 ### compiling
 I include a codeblocks project file but really not a requirement. Just
 ```gcc main.c```
 should do the trick.
 
-### example
-Output for a test ~ 700kB .exe with 31 overlays : one file per overlay, plus a text summary of each overlay header:
+### what it does
+(WIP)
+An overlayed .exe is structured like this :
 
-(tab-separated text)
 ```
+   main .exe                                             each OVL_xxx :
+                           file offset
++-----------------------+  0                           +-----------------------+
+| MZ header             |                              |  MZ header            |
+| "overlay number"=0    |                              |  "overlay number" field
++-----------------------+  0x1E                        |      >= 0             |
+| relocation table      |                              +-----------------------+
+|                       |                              |  relocs               |
++-----------------------+  (hdr_parags * 0x10)         |                       |
+| image                 |                              +-----------------------+
+|                       |                              |  image                |
+|                       |                              |                       |
+|                       |                              +-----------------------+
+++----------------------+  (img_pages * 0x200)
+ |  OVL_001             |
+ |                      |
+ +----------------------+
+ |  OVL_002             |
+ |                      |
+ +----------------------+
+ |  OVL_...             |
+ |                      |
+ +----------------------+
+
+```
+
+Now, at run-time the memory map looks like this :
+
+```
+       layout in memory
+       (when running)
+
++---------------------------+ IMG_BASE
+|                           |
+|    main code (overlay 000)|
+|                           |
+|                           |
++---------------------------+ OVL_BASE
+  | overlays loaded here    |
+  | (initially all 0x00)    |
+  |                         |
+  |                         |
++---------------------------+ OVL_BASE + max_ovl_size
+|                           |
+|   rest of main code       |
+|   (ovl 000)               |
+|                           |
+|   also data segment etc.  |
+|                           |
+|                           |
++---------------------------+ SS:0000
+|                           |
+|       stack               |
+|                           |
++---------------------------+ initial SS:SP (top of stack)
+
+```
+
+Naturally only one overlay can be loaded at OVL_BASE at a time. This makes static analysis (radare2, IDA, etc) troublesome.
+The "unfold" mode of this tool cooks a new .exe with all the overlays appended after the stack, while also
+ - combining and adjusting all the relocations into one reloc table
+ - replacing all "int 3F" calls by a "call far xyz" opcode.
+
+
+### example
+Different outputs for a test ~ 700kB .exe containing 31 overlays.
+In "dump mode", creates one file per overlay, plus a text summary of each overlay header.
+
+List overlays :
+```
+> overlazy test.exe l
 OVL #	start(file ofs)	siz	numpages (512B)	# relocs	Offset to load image (parags)	Minimum alloc (parags)	Maximum alloc (parags)	Initial SS:SP	Initial CS:IP	
 0000	00000000	00071400	038A	247E	0940	0AFE	FFFF	67EE:AFC8	2CBD:2905
 0001	00071400	00002000	0010	00DC	0040	0000	FFFF	67EE:AFC8	2CBD:2905
 0002	00073400	00001200	0009	0058	0020	0000	FFFF	67EE:AFC8	2CBD:2905
-0003	00074600	00001800	000C	005B	0020	0000	FFFF	67EE:AFC8	2CBD:2905
-0004	00075E00	00000E00	0007	005D	0020	0000	FFFF	67EE:AFC8	2CBD:2905
-0005	00076C00	00004A00	0025	02C9	00C0	0000	FFFF	67EE:AFC8	2CBD:2905
-0006	0007B600	00003000	0018	01E5	0080	0000	FFFF	67EE:AFC8	2CBD:2905
-0007	0007E600	00002800	0014	0145	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-0008	00080E00	00002A00	0015	01C0	0080	0000	FFFF	67EE:AFC8	2CBD:2905
-0009	00083800	00003E00	001F	01D1	0080	0000	FFFF	67EE:AFC8	2CBD:2905
-000A	00087600	00002400	0012	016F	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-000B	00089A00	00003200	0019	01EF	0080	0000	FFFF	67EE:AFC8	2CBD:2905
-000C	0008CC00	00002400	0012	010B	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-000D	0008F000	00002200	0011	0150	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-000E	00091200	00001C00	000E	0110	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-000F	00092E00	00001E00	000F	0125	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-0010	00094C00	00002A00	0015	01A9	0080	0000	FFFF	67EE:AFC8	2CBD:2905
-0011	00097600	00001200	0009	00BE	0040	0000	FFFF	67EE:AFC8	2CBD:2905
-0012	00098800	00000800	0004	0041	0020	0000	FFFF	67EE:AFC8	2CBD:2905
-0013	00099000	00003200	0019	0202	00A0	0000	FFFF	67EE:AFC8	2CBD:2905
-0014	0009C200	00003000	0018	00B3	0040	0000	FFFF	67EE:AFC8	2CBD:2905
-0015	0009F200	00002A00	0015	016F	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-0016	000A1C00	00001C00	000E	0141	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-0017	000A3800	00001E00	000F	0120	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-0018	000A5600	00000C00	0006	0072	0020	0000	FFFF	67EE:AFC8	2CBD:2905
-0019	000A6200	00001600	000B	0092	0040	0000	FFFF	67EE:AFC8	2CBD:2905
-001A	000A7800	00002200	0011	0130	0060	0000	FFFF	67EE:AFC8	2CBD:2905
-001B	000A9A00	00001A00	000D	00DC	0040	0000	FFFF	67EE:AFC8	2CBD:2905
-001C	000AB400	00001600	000B	0093	0040	0000	FFFF	67EE:AFC8	2CBD:2905
-001D	000ACA00	00000C00	0006	0074	0020	0000	FFFF	67EE:AFC8	2CBD:2905
-001E	000AD600	00000600	0003	0026	0020	0000	FFFF	67EE:AFC8	2CBD:2905
-``````
+....
+```
+
+finding all "int 0x3F" calls :
+```
+> overlazy test.exe c
+file_ofs	ovl_idx	offs
+942A	11	0000
+9432	14	0004
+943A	15	0000
+9442	17	0008
+944A	16	000E
+....
+```
+
+Flattening an .exe for static analysis (the .exe created will probably NOT be executable)
+```
+> overlazy test.exe u 6F2F4 6F37E 45 38CC
+
+seglut @ 6F2F4, ovllut @ 6F37E, entries=45 ovlbase 38CC:0000
+mapping OVL_1 @ 72EB0 within image
+mapping OVL_2 @ 74A90 within image
+mapping OVL_3 @ 75910 within image
+mapping OVL_4 @ 76D40 within image
+mapping OVL_5 @ 778F0 within image
+....
+```
+

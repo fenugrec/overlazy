@@ -1,19 +1,23 @@
 /* Overlazy
  *
- * Crude tool to split overlayed DOS exe into chunks; one file per overlay.
+ * Crude CLI tool for overlayed DOS programs.
+ * Run without arguments to print usage info.
+ *
  * Designed for binaries compiled with MS C compiler 5.1;
  * Others of similar vintage might work too.
  *
  * (c) fenugrec 2017
+ * Licensed under GPLv3
+ *
  *
  * Assumptions:
  * - host is little-endian (x86 etc).
- * - C99 compliant compiler, any OS
+ * - C99 compliant compiler
  * - source .exe is a valid DOS program
  * - overlays don't have relative pointers to data/code outside their own image
  * - overlays don't store data outside their own image, within the OVL mapping area
  *
- * Note : unsafe code - limited bounds checking, naive string processing. Run at your own risk
+ * Note : unsafe code - limited bounds checking, naive string processing, etc. Run at your own risk !
  *
  */
 
