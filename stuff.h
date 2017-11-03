@@ -8,15 +8,12 @@
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
-typedef uint8_t byte;
-typedef uint16_t word;
-typedef uint32_t dword;
 
 //************* hax macros
 #define read_u16_LE(u8p)    ((u16)((u8 *)(u8p))[0] + ((u16)((u8 *)(u8p))[1] << 8))
 
 // round up seg:ofs to next segment
-#define nextseg(seg,ofs)	(((((seg << 4) + ofs) + 16) & ~0x0F) >> 4)
+#define nextseg(seg,ofs)	((((seg << 4) + ofs) + 16) >> 4)
 
 /* this header isn't a perfect match with some MS headers
  * which have an extra u16 field at the end

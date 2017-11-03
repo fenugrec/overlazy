@@ -107,7 +107,6 @@ void close_exe(struct exefile *exf) {
 
 bool parse_header(struct exefile *exf) {
 	struct header *hdr = &exf->hdr;
-	u32 cb;
 
 	bool validsig = (hdr->sigLo == 0x4D && hdr->sigHi == 0x5A);
 	if (!validsig) {
@@ -119,16 +118,6 @@ bool parse_header(struct exefile *exf) {
 	if (hdr->relocTabOffset == 0x40) {
 		printf("new exe\n");
 		return 0;
-	}
-
-	/* Calculate the load module size.
-	 * This is the number of pages in the file
-	 * less the length of the header and reloc table
-	 * less the number of bytes unused on last page
-	*/
-	cb = (dword)hdr->numPages * 512 - (dword)hdr->numParaHeader * 16;
-	if (hdr->lastPageSize) {
-		cb -= 512 - hdr->lastPageSize;
 	}
 
 	return 1;
