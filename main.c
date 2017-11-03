@@ -630,6 +630,8 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u16 lut_e
 		chunk_segdelta = imgcur_parags - ovl_base;
 		fixup_seglut(nex.img, seglut_pos, olut_pos, lut_entries, i, chunk_segdelta);
 
+		printf("mapping OVL_%X @ %X0 within image\n", i, imgcur_parags);
+
 		//advance cursors
 		rcur += (oda[i].hdr.numReloc * 4);
 		imgcur_parags += ((oda[i].img_siz + 15) >> 4);	//round to next parag
