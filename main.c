@@ -489,6 +489,7 @@ u16 fixup_int3f(u8 *imgbuf, u32 bufsiz, u32 seglutpos, u32 olutpos, u8 lut_entri
  *	numPages;
  *	numReloc;
  *	numParaHeader;
+ *	inital SS:SP
  */
 void dump_newheader(FILE *outf, struct new_exe *nex, u32 rcur, u16 imgcur_parags) {
 	u32 wcur = 0;
@@ -501,6 +502,8 @@ void dump_newheader(FILE *outf, struct new_exe *nex, u32 rcur, u16 imgcur_parags
 	nex->hdr.numParaHeader = (sizeof(struct header) + rcur + 15) >> 4;	//round to next parag
 	nex->hdr.lastPageSize = ((nex->hdr.numParaHeader + imgcur_parags) * 16) & 511;
     nex->hdr.numPages = (((nex->hdr.numParaHeader + imgcur_parags) * 16) + 511) / 512;
+    nex->hdr.initSS = imgcur_parags;
+    nex->hdr.initSP = 8;	//dummy 8-byte stack
 
     //write hdr
     wlen = fwrite(&nex->hdr, 1, sizeof(struct header), outf);

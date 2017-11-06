@@ -114,7 +114,7 @@ file_ofs	ovl_idx	offs
 ....
 ```
 
-Flattening an .exe for static analysis (the .exe created will probably NOT be executable)
+Flattening an .exe for static analysis (the .exe created will NOT be executable !)
 ```
 > overlazy test.exe u 6F2F4 6F37E 45 38CC
 
