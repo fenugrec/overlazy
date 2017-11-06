@@ -102,10 +102,10 @@ Resulting .exe layout :
 |                                 |
 |                                 |
 +---------------------------------+ (hdr_parags * 0x10)
-|                                 |
 |  main/root image (OVL_000)      |
-|      (plus 0x00 filling for     |
-|  original stack area / BSS )    |
++---------------------------------+
+|  blank area (0x00 filled)       |
+|  (original stack area / BSS )   |
 |                                 |
 +---------------------------------+ (hdr_parags * 0x10) + (original SS:SP)
 |  concatenated images of         |
