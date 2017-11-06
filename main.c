@@ -15,7 +15,8 @@
  * - C99 compliant compiler
  * - source .exe is a valid DOS program
  * - overlays don't have relative pointers to data/code outside their own image
- * - overlays don't store data outside their own image, within the OVL mapping area
+ * - overlays don't access data that is within the OVL mapping area, outside their own image
+ * - overlay area size < 64kB
  *
  * Note : unsafe code - limited bounds checking, naive string processing, etc. Run at your own risk !
  *
@@ -232,36 +233,47 @@ void dump_ovls(const struct exefile *exf, const char *prefix) {
 
 /** raw search for all "int 0x3F" calls
  *
- * expect lots of spurious hits due to no filtering
+ * @param enable_print : quiet mode if 0
+ *
+ * @return # of OVL calls found
+ *
+ * expect lots of spurious hits due to no filtering.
  */
-void dump_ovlcalls(const struct exefile *exf) {
+u32 dump_ovlcalls(const u8 *imgbuf, u32 bufiz, bool enable_print) {
 #define PATLEN 5
 #define MATCHLEN 2
 	const u8 pat[MATCHLEN]={0xCD, 0x3F};	//pattern
 
+	u32 ncalls = 0;
 	u32 ofs = 0;	//within exe file
 
-	printf(	"file_ofs\t"
-			"ovl_idx\t"
-			"offs\n"
-			);
-	while ((ofs + PATLEN) <= exf->siz) {
+	if (enable_print) {
+		printf(	"file_ofs\t"
+				"ovl_idx\t"
+				"offs\n"
+				);
+	}
+
+	while ((ofs + PATLEN) < bufiz) {
 		int i;
 		bool match = 1;
 		for (i=0; i < MATCHLEN; i++) {
-			if (exf->buf[ofs + i] != pat[i]) {
+			if (imgbuf[ofs + i] != pat[i]) {
 				match = 0;
 				break;
 			}
 		}
 		if (match) {
-			u16 ovl_offs = read_u16_LE(&exf->buf[ofs+3]);
-			printf("%04X\t%02X\t%04X\n",
-					ofs, (unsigned) exf->buf[ofs+2], (unsigned) ovl_offs );
+			u16 ovl_offs = read_u16_LE(&imgbuf[ofs+3]);
+			ncalls++;
+			if (enable_print) {
+					printf("%04X\t%02X\t%04X\n",
+						ofs, (unsigned) imgbuf[ofs+2], (unsigned) ovl_offs );
+			}
 		}
 		ofs++;
 	}
-	return;
+	return ncalls;
 }
 
 /** print list of overlay chunks and their headers
@@ -440,36 +452,61 @@ void fixup_seglut(u8 *imgbuf, u32 seglutpos, u32 olutpos, u16 lut_entries, u16 o
 
 /** fixup INT 0x3F calls
  *
- * @param seglutpos : ofs in imgbuf of segment LUT
- * @param olutpos : ofs in imgbuf of ovl # LUT
+ * @param seglut : segment LUT
+ * @param olut : ovl # LUT
  * @param lut_entries : # of entries
+ * @param img : image buffer to modify
+ * @param relocs : complete reloc table,
+ * @param rcur: offs within relocs[] for new reloc items
  *
  * @return # of fixups carried out.
  *
  * replaces "CD 3F" opcodes and following 3 bytes with a "call far ptr" to the correct destination
  * this must be done after the LUT has been corrected with the new mapping.
  */
-u16 fixup_int3f(u8 *imgbuf, u32 bufsiz, u32 seglutpos, u32 olutpos, u8 lut_entries) {
+u16 fixup_int3f(const u8 *seglut, const u8 *olut, u8 lut_entries, u8 *img, u32 imgsiz, u8 *relocs, u32 rcur) {
 	u16 nrelocs = 0;
 	u32 cur;
 
-	for (cur = 0; (cur + 5) < bufsiz; cur++) {
+	for (cur = 0; (cur + 5) < imgsiz; cur++) {
 		u8 ovl_id;	//not the same as overlay # !
+		u8 ovl_no;
 		u16 seg, offs;
-		if (imgbuf[cur] != 0xCD) continue;
-		if (imgbuf[cur + 1] != 0x3F) continue;
+		u16 r_seg, r_offs;	//seg:ofs or relocation item within img[]
+		u32 rcur_test;
 
-		ovl_id = imgbuf[cur + 2];
+		if (img[cur] != 0xCD) continue;
+		if (img[cur + 1] != 0x3F) continue;
+
+		//match !
+		ovl_id = img[cur + 2];
 		if (ovl_id >= lut_entries) {
 			printf("ovl ID > lut_entries @ %X !?\n", cur);
 			return nrelocs;
 		}
-		offs = read_u16_LE(&imgbuf[cur + 3]);
-		seg = read_u16_LE(&imgbuf[seglutpos + (2 * ovl_id)]);
+		//obtain actual call destination
+		offs = read_u16_LE(&img[cur + 3]);
+		seg = read_u16_LE(&seglut[(2 * ovl_id)]);
+		ovl_no = olut[ovl_id];
 
-		imgbuf[cur] = 0x9A;	//opcode for "call (far ptr) seg:offs"
-		write_u16_LE(&imgbuf[cur+1], offs);
-		write_u16_LE(&imgbuf[cur+3], seg);
+		//write new opcode
+		img[cur] = 0x9A;	//opcode for "call (far ptr) seg:offs"
+		write_u16_LE(&img[cur+1], offs);
+		write_u16_LE(&img[cur+3], seg);
+
+		//add entry to reloc table. Try to reuse an existing segment
+		for (rcur_test = 0; rcur_test < rcur; rcur_test += 4) {
+			r_seg = read_u16_LE(&relocs[rcur_test + 2]);
+			//if we can reach the reloc item with an offset < 64k, we can use that seg.
+			if (((cur + 3) - (r_seg * 16)) < 0xFFFF) break;
+		}
+		if (rcur_test >= rcur) {
+			//we couldn't find an appropriate seg : too bad.
+			r_seg = (cur + 3) >> 4;
+		}
+		r_offs = (cur + 3) - (r_seg * 16);	//offset within segment of remapped OVL
+		write_u16_LE(&relocs[rcur + (nrelocs * 4) + 0], r_offs);
+		write_u16_LE(&relocs[rcur + (nrelocs * 4) + 2], r_seg);
 
 		nrelocs += 1;
 		cur += 4;	//not +5 since there's a "++" at the loop top
@@ -553,6 +590,8 @@ write_err:
 void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u8 lut_entries, u16 ovl_base, const char *out_fname) {
 	u16 num_ovls;	//excluding root
 	u16 num_relocs = 0;
+	u32 num_ovlcalls = 0;
+	u32 num_fixups;
 	u32 imgsiz = 0;
 	u16 i;
 	struct ovl_desc *oda;	//array of descriptors
@@ -593,6 +632,7 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u8 lut_en
 	for (i=0; i <= num_ovls; i++) {
 		num_relocs += oda[i].hdr.numReloc;
 		imgsiz += oda[i].img_siz;
+		num_ovlcalls += dump_ovlcalls(&exf->buf[oda[i].img_ofs], oda[i].img_siz, 0);
 	}
 
 	// check if it can be done by mapping OVLs *above* SS:SP.
@@ -605,7 +645,7 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u8 lut_en
 	}
 
 	//allocate new data structures
-	nex.relocs = malloc(num_relocs * 4);
+	nex.relocs = malloc((num_relocs + num_ovlcalls) * 4);
 	if (!nex.relocs) goto fexit;
 		// max total size is (headers) + (reloc table) + (base size up to SS:SP) + (ovl img data) + 1 parag per ovl
 	nex.img = calloc(	sizeof(struct header) +
@@ -619,6 +659,7 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u8 lut_en
 	// write in root OVL_000 image, including its relocs
 	memcpy(nex.relocs, &exf->buf[oda[0].relocs_ofs], oda[0].hdr.numReloc * 4);
 	memcpy(nex.img, &exf->buf[oda[0].img_ofs], oda[0].img_siz);
+
 	rcur = oda[0].hdr.numReloc * 4;
 	imgcur_parags = exf->hdr.initSS + ((exf->hdr.initSP + 15) >> 4);	//bring cursor after stack area
 
@@ -643,10 +684,20 @@ void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u8 lut_en
 		//advance cursors
 		rcur += (oda[i].hdr.numReloc * 4);
 		imgcur_parags += ((oda[i].img_siz + 15) >> 4);	//round to next parag
+		if (imgcur_parags >= 0xFFFF) {
+			printf("busted address space !\n");
+			goto fexit;
+		}
 	}
 
 	//fixup INT 3F calls
-	fixup_int3f(nex.img, imgcur_parags * 16, seglut_pos, olut_pos, lut_entries);
+	num_fixups = fixup_int3f(&nex.img[seglut_pos], &nex.img[olut_pos], lut_entries, nex.img, imgcur_parags * 16, nex.relocs, rcur);
+	rcur += (num_fixups * 4);
+	printf("Fixed 0x%X int3f calls.\n", num_fixups);
+
+	if (num_fixups != num_ovlcalls) {
+		printf("Mismatch in # of int3F fixups. Possible spurious hits or fixups\n");
+	}
 
 	//regen new exe header. mostly same as orig
 	memcpy(&nex.hdr, &exf->hdr, sizeof(struct header));
@@ -704,7 +755,7 @@ int main(int argc, char *argv[])
 			badargs = 0;
 			break;
 		case 'c':
-			dump_ovlcalls(&exf);
+			dump_ovlcalls(exf.buf, exf.siz, 1);
 			badargs = 0;
 			break;
 		case 'u':

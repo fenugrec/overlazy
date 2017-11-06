@@ -11,8 +11,8 @@ Note : this is relatively unsafe code : limited bounds checking, naive string pr
 Should be harmless on well-formed , legitimate .exe files.
 
 #### status
-- almost works - the int 3F fixups don't work properly since the additional "call far" isn't covered by the relocations.
-- mapping the overlays above the top-of-stack could be a problem
+- works for at least some valid .exe files
+- mapping the overlays above the top-of-stack could be a problem.
 
 ### compiling
 I include a codeblocks project file but really not a requirement. Just
@@ -85,7 +85,34 @@ Now, at run-time the memory map looks like this :
 Naturally only one overlay can be loaded at OVL_BASE at a time. This makes static analysis (radare2, IDA, etc) troublesome.
 The "unfold" mode of this tool cooks a new .exe with all the overlays appended after the stack, while also
  - combining and adjusting all the relocations into one reloc table
- - replacing all "int 3F" calls by a "call far xyz" opcode.
+ - replacing all "int 3F" calls by a "call far xyz" opcode
+
+Resulting .exe layout :
+
+```
+   new "flattened" .exe
+                                    file offset
++---------------------------------+ 0
+| MZ header                       |
++---------------------------------+ 0x1C
+| relocation table:               |
+|    - original OVL_000 relocs    |
+|    - adjusted OVL_XXX relocs    |
+|    - new relocs for call fixups |
+|                                 |
+|                                 |
++---------------------------------+ (hdr_parags * 0x10)
+|                                 |
+|  main/root image (OVL_000)      |
+|      (plus 0x00 filling for     |
+|  original stack area / BSS )    |
+|                                 |
++---------------------------------+ (hdr_parags * 0x10) + (original SS:SP)
+|  concatenated images of         |
+|   OVL_001...OVL_XXX             |
++---------------------------------+
+
+```
 
 
 ### example
