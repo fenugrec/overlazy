@@ -442,11 +442,15 @@ void fixup_seglut(u8 *imgbuf, u32 seglutpos, u32 olutpos, u16 lut_entries, u16 o
  *
  * @param seglutpos : ofs in imgbuf of segment LUT
  * @param olutpos : ofs in imgbuf of ovl # LUT
+ * @param lut_entries : # of entries
+ *
+ * @return # of fixups carried out.
  *
  * replaces "CD 3F" opcodes and following 3 bytes with a "call far ptr" to the correct destination
- * this must be done after the LUT has been corrected with the new mapping
+ * this must be done after the LUT has been corrected with the new mapping.
  */
-void fixup_int3f(u8 *imgbuf, u32 bufsiz, u32 seglutpos, u32 olutpos, u16 lut_entries) {
+u16 fixup_int3f(u8 *imgbuf, u32 bufsiz, u32 seglutpos, u32 olutpos, u8 lut_entries) {
+	u16 nrelocs = 0;
 	u32 cur;
 
 	for (cur = 0; (cur + 5) < bufsiz; cur++) {
@@ -456,14 +460,22 @@ void fixup_int3f(u8 *imgbuf, u32 bufsiz, u32 seglutpos, u32 olutpos, u16 lut_ent
 		if (imgbuf[cur + 1] != 0x3F) continue;
 
 		ovl_id = imgbuf[cur + 2];
+		if (ovl_id >= lut_entries) {
+			printf("ovl ID > lut_entries @ %X !?\n", cur);
+			return nrelocs;
+		}
 		offs = read_u16_LE(&imgbuf[cur + 3]);
 		seg = read_u16_LE(&imgbuf[seglutpos + (2 * ovl_id)]);
 
 		imgbuf[cur] = 0x9A;	//opcode for "call (far ptr) seg:offs"
 		write_u16_LE(&imgbuf[cur+1], offs);
 		write_u16_LE(&imgbuf[cur+3], seg);
+
+		nrelocs += 1;
 		cur += 4;	//not +5 since there's a "++" at the loop top
 	}
+
+	return nrelocs;
 }
 
 /** tweak header fields for mostly correct info, and write out.
@@ -535,7 +547,7 @@ write_err:
  *
  * The resulting .exe will probably not run properly anymore.
 */
-void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u16 lut_entries, u16 ovl_base, const char *out_fname) {
+void unfold_overlay(struct exefile *exf, u32 seglut_pos, u32 olut_pos, u8 lut_entries, u16 ovl_base, const char *out_fname) {
 	u16 num_ovls;	//excluding root
 	u16 num_relocs = 0;
 	u32 imgsiz = 0;
@@ -705,9 +717,9 @@ int main(int argc, char *argv[])
 				if (seglut > exf.siz) break;
 				if (olut > exf.siz) break;
 				if (ovlbase >= 0xFFFF) break;
-				if (lut_entries > 0xFFFF) break;
+				if (lut_entries >= 0xFF) break;
 				badargs = 0;
-				unfold_overlay(&exf, (u32) seglut, (u32) olut, (u16) lut_entries, (u16) ovlbase, "test.ex_");
+				unfold_overlay(&exf, (u32) seglut, (u32) olut, (u8) lut_entries, (u16) ovlbase, "test.ex_");
 				break;
 			}
 
