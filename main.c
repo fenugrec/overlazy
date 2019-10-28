@@ -30,7 +30,7 @@
 
 #include "stuff.h"
 
-inline void write_u16_LE(u8 *dest, u16 val) {
+static inline void write_u16_LE(u8 *dest, u16 val) {
 	*dest++ = val & 0xFF;
 	*dest = val >> 8;
 	return;
