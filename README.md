@@ -20,7 +20,10 @@ I include a codeblocks project file but really not a requirement. Just
 should do the trick.
 
 ### what it does
-(WIP)
+The overlay mechanism used in those compilers consists in an INT 0x3F handler that takes two arguments, an overlay number and a function number.
+It loads the corresponding overlay into the OVL_BASE area if not already loaded, and calls a function inside that overlay.
+It uses two look-up tables (LUT), one for overlay numbers and one for the functions. This is all better explained elsewhere...
+
 An overlayed .exe is structured like this :
 
 ```
@@ -115,7 +118,7 @@ Resulting .exe layout :
 ```
 
 
-### example
+### Usage examples
 Different outputs for a test ~ 700kB .exe containing 31 overlays.
 In "dump mode", creates one file per overlay, plus a text summary of each overlay header.
 
@@ -154,3 +157,4 @@ mapping OVL_5 @ 778F0 within image
 ....
 ```
 
+See also the examples/ directory of this repo for a minimal test to generate an overlayed .exe.
